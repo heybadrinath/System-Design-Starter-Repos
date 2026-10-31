@@ -32,7 +32,8 @@ const SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 // 'valid'  -> a good answer
 // 'badEnum'-> an unknown severity ("URGENT")
 // 'failed' -> the model failed (returns null)
-const MODE = 'valid';
+const MODE = process.env.MODE || 'valid';
+const PROMPT_VERSION = 'severity-suggestion-v1';
 function fakeModel() {
   if (MODE === 'failed') return null;
   if (MODE === 'badEnum') return { suggestedSeverity: 'URGENT', reason: 'errors rising' };
@@ -45,8 +46,10 @@ function fakeModel() {
 // ============================================================
 function buildContext() {
   return {
-    // fill this in: title, currentSeverity, service, timeline...
-    // but NOT reporterEmail or internalToken
+    title: incident.title,
+    currentSeverity: incident.currentSeverity,
+    service: incident.service,
+    timeline: [...timeline]
   };
 }
 
@@ -56,7 +59,11 @@ function buildContext() {
 // AND there is a non-empty reason.
 // ============================================================
 function isValid(answer) {
-  return false; // fill this in
+  return answer !== null && typeof answer === 'object' && !Array.isArray(answer)
+    && Object.keys(answer).length === 2
+    && Object.keys(answer).every(key => ['suggestedSeverity', 'reason'].includes(key))
+    && SEVERITIES.includes(answer.suggestedSeverity)
+    && typeof answer.reason === 'string' && answer.reason.trim().length > 0;
 }
 
 // ============================================================
@@ -64,11 +71,15 @@ function isValid(answer) {
 // Return a short message so the workflow still makes sense.
 // ============================================================
 function fallback() {
-  return { status: 'MANUAL_REVIEW', message: '' /* fill this in */ };
+  return {
+    status: 'MANUAL_REVIEW',
+    message: 'AI suggestion unavailable. Review the incident and select severity manually; the current severity is unchanged.'
+  };
 }
 
 // ── Given to you: runs one request start to finish. ──
 function run() {
+  console.log('Prompt version:', PROMPT_VERSION);
   console.log('Context sent to model:', buildContext());
 
   const answer = fakeModel();
@@ -81,9 +92,14 @@ function run() {
   console.log('AI suggests:', answer.suggestedSeverity, '(not applied yet)');
   console.log('Real severity is still:', incident.currentSeverity);
 
-  // A human approves — the only place the real value changes:
-  incident.currentSeverity = answer.suggestedSeverity;
-  console.log('After human approval:', incident.currentSeverity);
+  if (process.argv.includes('--approve')) {
+    // Explicit approval is the only path that changes the in-memory record.
+    incident.currentSeverity = answer.suggestedSeverity;
+    console.log('After human approval:', incident.currentSeverity);
+  } else {
+    console.log('Status: PENDING_APPROVAL. Re-run with --approve after reviewing the suggestion.');
+  }
 }
 
-run();
+if (require.main === module) run();
+module.exports = { buildContext, isValid, fallback };
